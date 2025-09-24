@@ -39,10 +39,79 @@ export default function MessageCard({
 }: MessageCardProps) {
   const [localPlaying, setLocalPlaying] = useState(false);
 
+  const playTTS = () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel(); // Stop any current speech
+      
+      const utterance = new SpeechSynthesisUtterance(content);
+      
+      const setupVoiceAndSpeak = () => {
+        const voices = window.speechSynthesis.getVoices();
+        
+        // Configure for NYC accent (closest available)
+        const preferredVoice = voices.find(voice => 
+          voice.lang.includes('en-US') && 
+          (voice.name.includes('Google') || voice.name.includes('Microsoft') || voice.name.includes('Alex'))
+        ) || voices.find(voice => voice.lang.includes('en-US')) || voices[0];
+        
+        if (preferredVoice) {
+          utterance.voice = preferredVoice;
+        }
+        
+        utterance.rate = 0.9;
+        utterance.pitch = 1.0;
+        
+        utterance.onend = () => {
+          setLocalPlaying(false);
+        };
+        
+        utterance.onerror = () => {
+          setLocalPlaying(false);
+          console.error('Speech synthesis error');
+        };
+        
+        window.speechSynthesis.speak(utterance);
+        console.log(`Playing ${type} message${accent ? ` with ${accent} accent` : ''}`);
+      };
+      
+      // Handle async voice loading
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        setupVoiceAndSpeak();
+      } else {
+        // Wait for voices to load
+        const voicesChangedHandler = () => {
+          setupVoiceAndSpeak();
+          window.speechSynthesis.removeEventListener('voiceschanged', voicesChangedHandler);
+        };
+        window.speechSynthesis.addEventListener('voiceschanged', voicesChangedHandler);
+        
+        // Fallback timeout in case voiceschanged never fires
+        setTimeout(() => {
+          window.speechSynthesis.removeEventListener('voiceschanged', voicesChangedHandler);
+          setupVoiceAndSpeak();
+        }, 1000);
+      }
+    } else {
+      console.log(`Speech synthesis not available. Would play ${type} message: ${content}`);
+      // Simulate playback duration
+      setTimeout(() => setLocalPlaying(false), 3000);
+    }
+  };
+
   const handlePlay = () => {
     setLocalPlaying(!localPlaying);
     onPlay();
-    console.log(`${localPlaying ? 'Stopping' : 'Playing'} ${type} message${accent ? ` with ${accent} accent` : ''}`);
+    
+    if (!localPlaying) {
+      playTTS();
+    } else {
+      // Stop TTS playback
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      console.log(`Stopped ${type} message`);
+    }
   };
 
   const cardColor = MESSAGE_COLORS[type];

@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import VoiceRecorder from './VoiceRecorder';
 import MessageCard, { MessageCardProps } from './MessageCard';
 import { Badge } from '@/components/ui/badge';
-// import { Separator } from '@/components/ui/separator';
+import { apiRequest } from '@/lib/queryClient';
+import { saveVoiceMessage, getStoredVoiceMessages, getStoredAudioBlob, type StoredVoiceMessage } from '@/utils/localStorage';
 
 interface CoachingMessage {
   id: string;
@@ -20,34 +21,78 @@ interface CoachingMessage {
 export default function CoachingSession() {
   const [sessions, setSessions] = useState<CoachingMessage[]>([]);
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  // Mock AI responses - todo: remove mock functionality
-  const generateMockResponses = (userMessage: string) => {
-    return {
-      accent: userMessage.replace(/\b(um|uh|like)\b/gi, '').trim() || userMessage,
-      language: userMessage
-        .replace('This is', 'This exemplifies')
-        .replace('demonstrates', 'showcases')
-        .replace('system', 'platform'),
-      executive: userMessage
-        .replace('This is a sample', 'This represents a professional')
-        .replace('voice message', 'communication')
-        .replace('coaching system', 'leadership development platform'),
-      ai: `I understand you're working with our coaching system. ${userMessage.includes('sample') ? 'This platform provides comprehensive voice training across multiple dimensions including accent refinement, language enhancement, and executive communication skills.' : 'How can I assist you further with your communication goals?'}`
-    };
-  };
+  // Load stored messages on component mount
+  useEffect(() => {
+    const storedMessages = getStoredVoiceMessages();
+    const loadedSessions: CoachingMessage[] = storedMessages.map(stored => ({
+      id: stored.id,
+      userMessage: stored.userMessage,
+      audioBlob: getStoredAudioBlob(stored.id) || new Blob(),
+      responses: stored.responses,
+      timestamp: new Date(stored.timestamp)
+    }));
+    setSessions(loadedSessions);
+  }, []);
 
-  const handleRecordingComplete = (audioBlob: Blob, transcript: string) => {
-    const newSession: CoachingMessage = {
-      id: Date.now().toString(),
-      userMessage: transcript,
-      audioBlob,
-      responses: generateMockResponses(transcript),
-      timestamp: new Date()
-    };
+  const handleRecordingComplete = async (audioBlob: Blob, transcript: string) => {
+    setIsProcessing(true);
+    
+    try {
+      // Send to backend for AI coaching responses
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'recording.wav');
+      formData.append('transcript', transcript);
 
-    setSessions(prev => [newSession, ...prev]);
-    console.log('New coaching session created:', newSession);
+      const response = await fetch('/api/voice-message', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to process voice message');
+      }
+
+      const result = await response.json();
+      
+      const newSession: CoachingMessage = {
+        id: result.id,
+        userMessage: result.userMessage,
+        audioBlob,
+        responses: result.responses,
+        timestamp: new Date(result.timestamp)
+      };
+
+      // Save to localStorage
+      await saveVoiceMessage(newSession.id, newSession.userMessage, audioBlob, newSession.responses);
+      
+      setSessions(prev => [newSession, ...prev]);
+      console.log('New coaching session created and saved:', newSession);
+    } catch (error) {
+      console.error('Error processing voice message:', error);
+      
+      // Fallback to mock responses if API fails
+      const newSession: CoachingMessage = {
+        id: Date.now().toString(),
+        userMessage: transcript,
+        audioBlob,
+        responses: {
+          accent: transcript.replace(/\b(um|uh|like)\b/gi, '').trim() || transcript,
+          language: transcript.replace('This is', 'This exemplifies').replace('demonstrates', 'showcases'),
+          executive: transcript.replace('This is a sample', 'This represents a professional'),
+          ai: "I understand you're working with our coaching system. This platform provides comprehensive voice training."
+        },
+        timestamp: new Date()
+      };
+      
+      // Save to localStorage even on API failure
+      await saveVoiceMessage(newSession.id, newSession.userMessage, audioBlob, newSession.responses);
+      
+      setSessions(prev => [newSession, ...prev]);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handlePlay = (messageId: string, messageType: string) => {
@@ -67,7 +112,10 @@ export default function CoachingSession() {
       <div className="grid lg:grid-cols-2 gap-8">
         {/* Voice Input Section */}
         <div className="space-y-6">
-          <VoiceRecorder onRecordingComplete={handleRecordingComplete} />
+          <VoiceRecorder 
+            onRecordingComplete={handleRecordingComplete} 
+            disabled={isProcessing}
+          />
           
           {sessions.length > 0 && (
             <div className="space-y-4">

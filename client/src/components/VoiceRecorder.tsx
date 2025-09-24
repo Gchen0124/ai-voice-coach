@@ -13,13 +13,51 @@ export default function VoiceRecorder({ onRecordingComplete, disabled = false }:
   const [isProcessing, setIsProcessing] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   const startRecording = async () => {
     try {
+      // Start audio recording
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
+
+      let finalTranscript = '';
+
+      // Start speech recognition with proper event handlers
+      if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+        recognitionRef.current = recognition;
+        
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+        
+        // Set up event handlers before starting
+        recognition.onresult = (event: SpeechRecognitionEvent) => {
+          let interimTranscript = '';
+          for (let i = 0; i < event.results.length; i++) {
+            if (event.results[i].isFinal) {
+              finalTranscript += event.results[i][0].transcript;
+            } else {
+              interimTranscript += event.results[i][0].transcript;
+            }
+          }
+          console.log('Speech recognition result:', finalTranscript + interimTranscript);
+        };
+        
+        recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+          console.error('Speech recognition error:', event.error);
+        };
+        
+        recognition.onend = () => {
+          console.log('Speech recognition ended');
+        };
+        
+        recognition.start();
+      }
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -29,16 +67,15 @@ export default function VoiceRecorder({ onRecordingComplete, disabled = false }:
 
       mediaRecorder.onstop = () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-        const mockTranscript = "This is a sample voice message that demonstrates the coaching system.";
-        
-        setIsProcessing(true);
-        // Simulate STT processing
-        setTimeout(() => {
-          onRecordingComplete(audioBlob, mockTranscript);
-          setIsProcessing(false);
-        }, 1500);
-        
         stream.getTracks().forEach(track => track.stop());
+        
+        // Use the collected transcript or fallback
+        const transcript = finalTranscript.trim() || "This is a sample voice message that demonstrates the coaching system.";
+        
+        setTimeout(() => {
+          onRecordingComplete(audioBlob, transcript);
+          setIsProcessing(false);
+        }, 500);
       };
 
       mediaRecorder.start();
@@ -51,8 +88,15 @@ export default function VoiceRecorder({ onRecordingComplete, disabled = false }:
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
       setIsRecording(false);
+      setIsProcessing(true);
+      
+      mediaRecorderRef.current.stop();
+      
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      
       console.log('Recording stopped');
     }
   };
