@@ -14,48 +14,56 @@ export default function VoiceRecorder({ onRecordingComplete, disabled = false }:
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const transcriptRef = useRef<string>('');
+  const resultIndexRef = useRef<number>(0);
 
   const startRecording = async () => {
     try {
+      // Reset transcript and index for new recording
+      transcriptRef.current = '';
+      resultIndexRef.current = 0;
+
       // Start audio recording
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
-      let finalTranscript = '';
-
       // Start speech recognition with proper event handlers
       if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         const recognition = new SpeechRecognition();
         recognitionRef.current = recognition;
-        
+
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = 'en-US';
-        
+
         // Set up event handlers before starting
         recognition.onresult = (event: SpeechRecognitionEvent) => {
           let interimTranscript = '';
-          for (let i = 0; i < event.results.length; i++) {
+
+          // Process only new results to avoid duplicates
+          for (let i = resultIndexRef.current; i < event.results.length; i++) {
             if (event.results[i].isFinal) {
-              finalTranscript += event.results[i][0].transcript;
+              transcriptRef.current += event.results[i][0].transcript;
+              resultIndexRef.current = i + 1; // Track processed results
             } else {
               interimTranscript += event.results[i][0].transcript;
             }
           }
-          console.log('Speech recognition result:', finalTranscript + interimTranscript);
+
+          console.log('Speech recognition - Final:', transcriptRef.current, 'Interim:', interimTranscript);
         };
-        
+
         recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
           console.error('Speech recognition error:', event.error);
         };
-        
+
         recognition.onend = () => {
           console.log('Speech recognition ended');
         };
-        
+
         recognition.start();
       }
 
@@ -68,10 +76,12 @@ export default function VoiceRecorder({ onRecordingComplete, disabled = false }:
       mediaRecorder.onstop = () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
         stream.getTracks().forEach(track => track.stop());
-        
-        // Use the collected transcript or fallback
-        const transcript = finalTranscript.trim() || "This is a sample voice message that demonstrates the coaching system.";
-        
+
+        // Use the captured transcript or fallback
+        const transcript = transcriptRef.current.trim() || "This is a sample voice message that demonstrates the coaching system.";
+
+        console.log('Final transcript captured:', transcript);
+
         setTimeout(() => {
           onRecordingComplete(audioBlob, transcript);
           setIsProcessing(false);

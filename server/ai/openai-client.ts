@@ -96,11 +96,11 @@ export async function transcribeAudio(audioBuffer: Buffer): Promise<string> {
   }
 
   try {
-    // Create a proper form data entry for OpenAI
-    const blob = new Blob([audioBuffer], { type: "audio/wav" });
-    
+    // Create a proper File object for OpenAI Whisper API
+    const audioFile = new File([audioBuffer], 'audio.wav', { type: 'audio/wav' });
+
     const transcription = await openai.audio.transcriptions.create({
-      file: blob as any, // OpenAI client accepts Blob
+      file: audioFile,
       model: "whisper-1",
     });
 

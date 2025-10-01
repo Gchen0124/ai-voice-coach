@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import VoiceRecorder from './VoiceRecorder';
 import MessageCard, { MessageCardProps } from './MessageCard';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Play } from 'lucide-react';
 import { apiRequest } from '@/lib/queryClient';
 import { saveVoiceMessage, getStoredVoiceMessages, getStoredAudioBlob, type StoredVoiceMessage } from '@/utils/localStorage';
 
@@ -20,8 +22,14 @@ interface CoachingMessage {
 
 export default function CoachingSession() {
   const [sessions, setSessions] = useState<CoachingMessage[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // Get the currently selected session or default to the first one
+  const selectedSession = selectedSessionId
+    ? sessions.find(s => s.id === selectedSessionId)
+    : sessions[0];
 
   // Load stored messages on component mount
   useEffect(() => {
@@ -66,8 +74,9 @@ export default function CoachingSession() {
 
       // Save to localStorage
       await saveVoiceMessage(newSession.id, newSession.userMessage, audioBlob, newSession.responses);
-      
+
       setSessions(prev => [newSession, ...prev]);
+      setSelectedSessionId(newSession.id); // Auto-select the new session
       console.log('New coaching session created and saved:', newSession);
     } catch (error) {
       console.error('Error processing voice message:', error);
@@ -88,8 +97,9 @@ export default function CoachingSession() {
       
       // Save to localStorage even on API failure
       await saveVoiceMessage(newSession.id, newSession.userMessage, audioBlob, newSession.responses);
-      
+
       setSessions(prev => [newSession, ...prev]);
+      setSelectedSessionId(newSession.id); // Auto-select the new session
     } finally {
       setIsProcessing(false);
     }
@@ -98,6 +108,35 @@ export default function CoachingSession() {
   const handlePlay = (messageId: string, messageType: string) => {
     const newPlayingId = playingId === `${messageId}-${messageType}` ? null : `${messageId}-${messageType}`;
     setPlayingId(newPlayingId);
+
+    // For user audio playback from stored sessions
+    if ((messageType === 'user' || messageType === 'user-history') && newPlayingId) {
+      const session = sessions.find(s => s.id === messageId);
+      if (session && session.audioBlob) {
+        // Play the original audio recording
+        const audioUrl = URL.createObjectURL(session.audioBlob);
+        const audio = new Audio(audioUrl);
+
+        audio.onended = () => {
+          setPlayingId(null);
+          URL.revokeObjectURL(audioUrl);
+        };
+
+        audio.onerror = () => {
+          setPlayingId(null);
+          URL.revokeObjectURL(audioUrl);
+          console.error('Error playing audio');
+        };
+
+        audio.play().catch(error => {
+          setPlayingId(null);
+          URL.revokeObjectURL(audioUrl);
+          console.error('Failed to play audio:', error);
+        });
+      } else {
+        setPlayingId(null);
+      }
+    }
   };
 
   return (
@@ -127,11 +166,40 @@ export default function CoachingSession() {
               </div>
               <div className="max-h-96 overflow-y-auto space-y-3">
                 {sessions.map((session, index) => (
-                  <div key={session.id} className="p-3 bg-muted rounded-lg">
-                    <div className="text-xs text-muted-foreground mb-1">
-                      Session {sessions.length - index}
+                  <div
+                    key={session.id}
+                    className={`p-3 rounded-lg cursor-pointer transition-all duration-200 border-2 ${
+                      selectedSession?.id === session.id
+                        ? 'bg-primary/10 border-primary'
+                        : 'bg-muted border-transparent hover:bg-muted/80'
+                    }`}
+                    onClick={() => setSelectedSessionId(session.id)}
+                  >
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="flex-1">
+                        <div className="text-xs text-muted-foreground mb-1">
+                          Session {sessions.length - index} • {new Date(session.timestamp).toLocaleTimeString()}
+                        </div>
+                        <div className="text-sm overflow-hidden text-ellipsis" style={{
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical'
+                        }}>
+                          {session.userMessage}
+                        </div>
+                      </div>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="w-6 h-6 shrink-0"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePlay(session.id, 'user-history');
+                        }}
+                      >
+                        <Play className="w-3 h-3" />
+                      </Button>
                     </div>
-                    <div className="text-sm">{session.userMessage}</div>
                   </div>
                 ))}
               </div>
@@ -141,17 +209,24 @@ export default function CoachingSession() {
 
         {/* Messages Display Section */}
         <div className="space-y-6">
-          {sessions.length > 0 ? (
+          {selectedSession ? (
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Latest Coaching Results</h3>
+              <h3 className="text-lg font-semibold">
+                Coaching Results
+                {selectedSessionId && (
+                  <span className="text-sm font-normal text-muted-foreground ml-2">
+                    • {new Date(selectedSession.timestamp).toLocaleString()}
+                  </span>
+                )}
+              </h3>
               <div className="space-y-4">
                 {/* User Original Message */}
                 <MessageCard
                   type="user"
                   title="Your Original Message"
-                  content={sessions[0].userMessage}
-                  isPlaying={playingId === `${sessions[0].id}-user`}
-                  onPlay={() => handlePlay(sessions[0].id, 'user')}
+                  content={selectedSession.userMessage}
+                  isPlaying={playingId === `${selectedSession.id}-user`}
+                  onPlay={() => handlePlay(selectedSession.id, 'user')}
                 />
 
                 <div className="border-t my-4" />
@@ -161,28 +236,28 @@ export default function CoachingSession() {
                   <MessageCard
                     type="accent"
                     title="Accent Coach"
-                    content={sessions[0].responses.accent}
+                    content={selectedSession.responses.accent}
                     accent="NYC Upper West Side"
-                    isPlaying={playingId === `${sessions[0].id}-accent`}
-                    onPlay={() => handlePlay(sessions[0].id, 'accent')}
+                    isPlaying={playingId === `${selectedSession.id}-accent`}
+                    onPlay={() => handlePlay(selectedSession.id, 'accent')}
                   />
-                  
+
                   <MessageCard
                     type="language"
                     title="Language Coach"
-                    content={sessions[0].responses.language}
+                    content={selectedSession.responses.language}
                     accent="NYC Upper West Side"
-                    isPlaying={playingId === `${sessions[0].id}-language`}
-                    onPlay={() => handlePlay(sessions[0].id, 'language')}
+                    isPlaying={playingId === `${selectedSession.id}-language`}
+                    onPlay={() => handlePlay(selectedSession.id, 'language')}
                   />
-                  
+
                   <MessageCard
                     type="executive"
                     title="Executive Coach"
-                    content={sessions[0].responses.executive}
+                    content={selectedSession.responses.executive}
                     accent="NYC Upper West Side"
-                    isPlaying={playingId === `${sessions[0].id}-executive`}
-                    onPlay={() => handlePlay(sessions[0].id, 'executive')}
+                    isPlaying={playingId === `${selectedSession.id}-executive`}
+                    onPlay={() => handlePlay(selectedSession.id, 'executive')}
                   />
                 </div>
 
@@ -192,9 +267,9 @@ export default function CoachingSession() {
                 <MessageCard
                   type="ai"
                   title="AI Conversation"
-                  content={sessions[0].responses.ai}
-                  isPlaying={playingId === `${sessions[0].id}-ai`}
-                  onPlay={() => handlePlay(sessions[0].id, 'ai')}
+                  content={selectedSession.responses.ai}
+                  isPlaying={playingId === `${selectedSession.id}-ai`}
+                  onPlay={() => handlePlay(selectedSession.id, 'ai')}
                 />
               </div>
             </div>
