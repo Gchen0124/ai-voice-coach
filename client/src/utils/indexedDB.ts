@@ -1,5 +1,5 @@
 const DB_NAME = "VoiceCoachDB";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_AUDIO = "audioStore";
 const STORE_SESSIONS = "sessionStore";
 
@@ -7,13 +7,14 @@ export interface StoredSession {
   id: string;
   userMessage: string;
   responses: {
-    accent: string;
-    language: string;
-    executive: string;
+    accent?: string;
+    language?: string;
+    executive?: string;
     ai: string;
   };
   timestamp: number;
   audioKey: string;
+  fromLiveMode?: boolean;
 }
 
 function openDB(): Promise<IDBDatabase> {

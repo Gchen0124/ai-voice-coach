@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Mic, MicOff, Send, Save } from 'lucide-react';
 import { useRealtimeAPI } from '@/hooks/useRealtimeAPI';
 import { Input } from '@/components/ui/input';
-import { saveSession, saveAudioBlob } from '@/utils/indexedDB';
+import { saveSession, saveAudioBlob, getAudioBlob } from '@/utils/indexedDB';
 import { useToast } from '@/hooks/use-toast';
 
 interface ConversationMessage {
@@ -21,6 +21,7 @@ export default function LiveConversation() {
     connectionError,
     messages,
     transcript,
+    getSentenceAudio,
     connect,
     disconnect,
     startRecording,
@@ -42,53 +43,107 @@ export default function LiveConversation() {
   }, [connect, disconnect]);
 
   useEffect(() => {
-    messages.forEach(msg => {
-      const msgId = msg.event_id || `${msg.type}-${msg.timestamp || Date.now()}`;
+    const processMessages = async () => {
+      console.log('📨 Processing messages batch, total:', messages.length);
 
-      if (processedMessageIds.current.has(msgId)) {
-        return;
-      }
+      for (const msg of messages) {
+        const msgId = msg.event_id || `${msg.type}-${msg.timestamp || Date.now()}`;
 
-      if (msg.type === 'conversation.item.created') {
-        processedMessageIds.current.add(msgId);
+        if (processedMessageIds.current.has(msgId)) {
+          continue;
+        }
 
-        if (msg.item?.role === 'user' && msg.item?.content) {
-          const textContent = msg.item.content.find((c: any) => c.type === 'input_text' || c.type === 'text');
-          if (textContent && textContent.text) {
-            const userMessage = textContent.text;
-            setCurrentUserInput(userMessage);
-            setConversation(prev => [...prev, {
-              role: 'user',
-              content: userMessage,
-              timestamp: Date.now(),
-              id: msgId,
-            }]);
+        console.log('🔍 Processing new message:', msg.type, msgId);
+
+        if (msg.type === 'conversation.item.created') {
+          processedMessageIds.current.add(msgId);
+
+          if (msg.item?.role === 'user' && msg.item?.content) {
+            const textContent = msg.item.content.find((c: any) => c.type === 'input_text' || c.type === 'text');
+            if (textContent && textContent.text) {
+              const userMessage = textContent.text;
+              setCurrentUserInput(userMessage);
+              setConversation(prev => [...prev, {
+                role: 'user',
+                content: userMessage,
+                timestamp: Date.now(),
+                id: msgId,
+              }]);
+            }
           }
         }
-      }
 
-      if (msg.type === 'response.done') {
-        processedMessageIds.current.add(msgId);
+        if (msg.type === 'conversation.item.input_audio_transcription.completed') {
+          processedMessageIds.current.add(msgId);
+          const userTranscript = msg.transcript;
+          const transcriptId = msg.item_id || `transcript-${Date.now()}`;
 
-        if (msg.response?.output && msg.response.output.length > 0) {
-          const output = msg.response.output[0];
-          if (output.content && output.content.length > 0) {
-            const textContent = output.content.find((c: any) => c.type === 'text');
-            if (textContent && textContent.text) {
-              if (lastAssistantContent.current !== textContent.text) {
-                lastAssistantContent.current = textContent.text;
-                setConversation(prev => [...prev, {
-                  role: 'assistant',
-                  content: textContent.text,
-                  timestamp: Date.now(),
-                  id: msgId,
-                }]);
+          console.log('Transcription completed:', userTranscript, 'ID:', transcriptId);
+
+          if (userTranscript && userTranscript.trim()) {
+            const sessionId = `live-${Date.now()}`;
+            const audioKey = `audio-${sessionId}`;
+
+            try {
+              const sentenceAudio = getSentenceAudio(transcriptId);
+
+              if (sentenceAudio && sentenceAudio.size > 0) {
+                await saveAudioBlob(audioKey, sentenceAudio);
+                console.log('💾 Saved audio blob:', audioKey, 'size:', sentenceAudio.size);
+              } else {
+                console.warn('⚠️ No audio captured for sentence:', transcriptId);
+                await saveAudioBlob(audioKey, new Blob());
+              }
+
+              await saveSession({
+                id: sessionId,
+                userMessage: userTranscript,
+                responses: {
+                  ai: ''
+                },
+                timestamp: Date.now(),
+                audioKey,
+                fromLiveMode: true
+              });
+
+              console.log('✅ Auto-saved session to Focus Mode:', {
+                sessionId,
+                userMessage: userTranscript,
+                audioKey,
+                audioSize: sentenceAudio?.size || 0,
+                timestamp: new Date().toLocaleTimeString()
+              });
+            } catch (error) {
+              console.error('❌ Failed to save session:', error);
+            }
+          }
+        }
+
+        if (msg.type === 'response.done') {
+          processedMessageIds.current.add(msgId);
+
+          if (msg.response?.output && msg.response.output.length > 0) {
+            const output = msg.response.output[0];
+            if (output.content && output.content.length > 0) {
+              const textContent = output.content.find((c: any) => c.type === 'text');
+              if (textContent && textContent.text) {
+                if (lastAssistantContent.current !== textContent.text) {
+                  lastAssistantContent.current = textContent.text;
+                  setConversation(prev => [...prev, {
+                    role: 'assistant',
+                    content: textContent.text,
+                    timestamp: Date.now(),
+                    id: msgId,
+                  }]);
+                }
               }
             }
           }
         }
       }
-    });
+    };
+
+    processMessages();
   }, [messages]);
 
   const handleToggleRecording = () => {

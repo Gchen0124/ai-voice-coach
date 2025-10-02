@@ -14,6 +14,9 @@ export function useRealtimeAPI() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const nextStartTimeRef = useRef<number>(0);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const sentenceAudioMap = useRef<Map<string, Blob>>(new Map());
+  const isRecordingRef = useRef(false);
 
   const connect = useCallback(() => {
     console.log('Attempting to connect to realtime API...');
@@ -47,6 +50,15 @@ export function useRealtimeAPI() {
 
         if (message.type === 'conversation.item.input_audio_transcription.completed') {
           setTranscript(prev => prev + ' ' + message.transcript);
+
+          if (isRecordingRef.current && recordedChunksRef.current.length > 0) {
+            const audioBlob = new Blob(recordedChunksRef.current, { type: 'audio/webm' });
+            const transcriptId = message.item_id || `transcript-${Date.now()}`;
+            sentenceAudioMap.current.set(transcriptId, audioBlob);
+            console.log('🎵 Captured audio for sentence:', transcriptId, 'size:', audioBlob.size);
+
+            recordedChunksRef.current = [];
+          }
         }
 
         if (message.type === 'response.audio.delta') {
@@ -122,6 +134,21 @@ export function useRealtimeAPI() {
         mimeType: 'audio/webm',
       });
 
+      recordedChunksRef.current = [];
+      isRecordingRef.current = true;
+      sentenceAudioMap.current.clear();
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0 && isRecordingRef.current) {
+          recordedChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        isRecordingRef.current = false;
+        console.log('🛑 Recording stopped');
+      };
+
       mediaRecorderRef.current = mediaRecorder;
 
       const audioContext = new AudioContext({ sampleRate: 24000 });
@@ -154,7 +181,8 @@ export function useRealtimeAPI() {
         }
       };
 
-      mediaRecorder.start();
+      mediaRecorder.start(100);
+      console.log('🎤 Recording started');
     } catch (error) {
       console.error('Error starting recording:', error);
     }
@@ -189,11 +217,16 @@ export function useRealtimeAPI() {
     };
   }, [disconnect]);
 
+  const getSentenceAudio = (transcriptId: string): Blob | null => {
+    return sentenceAudioMap.current.get(transcriptId) || null;
+  };
+
   return {
     isConnected,
     connectionError,
     messages,
     transcript,
+    getSentenceAudio,
     connect,
     disconnect,
     startRecording,

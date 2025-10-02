@@ -1,9 +1,8 @@
 import { useState } from 'react';
-import CoachingSession from '@/components/CoachingSession';
+import FocusMode from '@/components/FocusMode';
 import LiveConversation from '@/components/LiveConversation';
 import ThemeToggle from '@/components/ThemeToggle';
-import { Button } from '@/components/ui/button';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export default function Home() {
   const [mode, setMode] = useState<'focus' | 'live'>('focus');
@@ -31,7 +30,7 @@ export default function Home() {
       </header>
 
       <main className="py-8">
-        {mode === 'focus' ? <CoachingSession /> : <LiveConversation />}
+        {mode === 'focus' ? <FocusMode /> : <LiveConversation />}
       </main>
     </div>
   );
