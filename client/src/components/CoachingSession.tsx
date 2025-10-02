@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Play } from 'lucide-react';
 import { apiRequest } from '@/lib/queryClient';
-import { saveVoiceMessage, getStoredVoiceMessages, getStoredAudioBlob, type StoredVoiceMessage } from '@/utils/localStorage';
+import { saveSession, getAllSessions, getAudioBlob, saveAudioBlob, type StoredSession } from '@/utils/indexedDB';
 
 interface CoachingMessage {
   id: string;
@@ -31,17 +31,24 @@ export default function CoachingSession() {
     ? sessions.find(s => s.id === selectedSessionId)
     : sessions[0];
 
-  // Load stored messages on component mount
   useEffect(() => {
-    const storedMessages = getStoredVoiceMessages();
-    const loadedSessions: CoachingMessage[] = storedMessages.map(stored => ({
-      id: stored.id,
-      userMessage: stored.userMessage,
-      audioBlob: getStoredAudioBlob(stored.id) || new Blob(),
-      responses: stored.responses,
-      timestamp: new Date(stored.timestamp)
-    }));
-    setSessions(loadedSessions);
+    const loadSessions = async () => {
+      const storedSessions = await getAllSessions();
+      const loadedSessions: CoachingMessage[] = await Promise.all(
+        storedSessions.map(async (stored) => {
+          const audioBlob = await getAudioBlob(stored.audioKey) || new Blob();
+          return {
+            id: stored.id,
+            userMessage: stored.userMessage,
+            audioBlob,
+            responses: stored.responses,
+            timestamp: new Date(stored.timestamp)
+          };
+        })
+      );
+      setSessions(loadedSessions);
+    };
+    loadSessions();
   }, []);
 
   const handleRecordingComplete = async (audioBlob: Blob, transcript: string) => {
@@ -72,16 +79,22 @@ export default function CoachingSession() {
         timestamp: new Date(result.timestamp)
       };
 
-      // Save to localStorage
-      await saveVoiceMessage(newSession.id, newSession.userMessage, audioBlob, newSession.responses);
+      const audioKey = `audio-${newSession.id}`;
+      await saveAudioBlob(audioKey, audioBlob);
+      await saveSession({
+        id: newSession.id,
+        userMessage: newSession.userMessage,
+        responses: newSession.responses,
+        timestamp: newSession.timestamp.getTime(),
+        audioKey
+      });
 
       setSessions(prev => [newSession, ...prev]);
-      setSelectedSessionId(newSession.id); // Auto-select the new session
+      setSelectedSessionId(newSession.id);
       console.log('New coaching session created and saved:', newSession);
     } catch (error) {
       console.error('Error processing voice message:', error);
       
-      // Fallback to mock responses if API fails
       const newSession: CoachingMessage = {
         id: Date.now().toString(),
         userMessage: transcript,
@@ -94,12 +107,19 @@ export default function CoachingSession() {
         },
         timestamp: new Date()
       };
-      
-      // Save to localStorage even on API failure
-      await saveVoiceMessage(newSession.id, newSession.userMessage, audioBlob, newSession.responses);
+
+      const audioKey = `audio-${newSession.id}`;
+      await saveAudioBlob(audioKey, audioBlob);
+      await saveSession({
+        id: newSession.id,
+        userMessage: newSession.userMessage,
+        responses: newSession.responses,
+        timestamp: newSession.timestamp.getTime(),
+        audioKey
+      });
 
       setSessions(prev => [newSession, ...prev]);
-      setSelectedSessionId(newSession.id); // Auto-select the new session
+      setSelectedSessionId(newSession.id);
     } finally {
       setIsProcessing(false);
     }

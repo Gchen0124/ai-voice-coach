@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Play, Pause, Volume2 } from 'lucide-react';
+import { Play, Pause, Volume2, Loader2 } from 'lucide-react';
+import { getTTSAudio, saveTTSAudio } from '@/utils/indexedDB';
 
 export interface MessageCardProps {
   type: 'user' | 'accent' | 'language' | 'executive' | 'ai';
@@ -11,12 +12,14 @@ export interface MessageCardProps {
   isPlaying?: boolean;
   onPlay: () => void;
   accent?: string;
+  voice?: string;
+  speed?: number;
 }
 
 const MESSAGE_COLORS = {
   user: 'bg-muted',
   accent: 'bg-blue-50 dark:bg-blue-950/30',
-  language: 'bg-green-50 dark:bg-green-950/30', 
+  language: 'bg-green-50 dark:bg-green-950/30',
   executive: 'bg-purple-50 dark:bg-purple-950/30',
   ai: 'bg-orange-50 dark:bg-orange-950/30'
 };
@@ -29,90 +32,173 @@ const MESSAGE_BADGES = {
   ai: { label: 'AI Response', variant: 'default' as const }
 };
 
-export default function MessageCard({ 
-  type, 
-  title, 
-  content, 
-  isPlaying = false, 
+export default function MessageCard({
+  type,
+  title,
+  content,
+  isPlaying = false,
   onPlay,
-  accent 
+  accent,
+  voice = 'alloy',
+  speed = 1.0
 }: MessageCardProps) {
   const [localPlaying, setLocalPlaying] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [usingFallback, setUsingFallback] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const playTTS = () => {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel(); // Stop any current speech
-      
-      const utterance = new SpeechSynthesisUtterance(content);
-      
-      const setupVoiceAndSpeak = () => {
-        const voices = window.speechSynthesis.getVoices();
-        
-        // Configure for NYC accent (closest available)
-        const preferredVoice = voices.find(voice => 
-          voice.lang.includes('en-US') && 
-          (voice.name.includes('Google') || voice.name.includes('Microsoft') || voice.name.includes('Alex'))
-        ) || voices.find(voice => voice.lang.includes('en-US')) || voices[0];
-        
-        if (preferredVoice) {
-          utterance.voice = preferredVoice;
-        }
-        
-        utterance.rate = 0.9;
-        utterance.pitch = 1.0;
-        
-        utterance.onend = () => {
-          setLocalPlaying(false);
-        };
-        
-        utterance.onerror = () => {
-          setLocalPlaying(false);
-          console.error('Speech synthesis error');
-        };
-        
-        window.speechSynthesis.speak(utterance);
-        console.log(`Playing ${type} message${accent ? ` with ${accent} accent` : ''}`);
-      };
-      
-      // Handle async voice loading
+  const playWebSpeechAPI = () => {
+    if (!('speechSynthesis' in window)) {
+      console.error('Web Speech API not available');
+      setLocalPlaying(false);
+      setIsLoading(false);
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(content);
+
+    const setupVoiceAndSpeak = () => {
       const voices = window.speechSynthesis.getVoices();
-      if (voices.length > 0) {
-        setupVoiceAndSpeak();
-      } else {
-        // Wait for voices to load
-        const voicesChangedHandler = () => {
-          setupVoiceAndSpeak();
-          window.speechSynthesis.removeEventListener('voiceschanged', voicesChangedHandler);
-        };
-        window.speechSynthesis.addEventListener('voiceschanged', voicesChangedHandler);
-        
-        // Fallback timeout in case voiceschanged never fires
-        setTimeout(() => {
-          window.speechSynthesis.removeEventListener('voiceschanged', voicesChangedHandler);
-          setupVoiceAndSpeak();
-        }, 1000);
+
+      const preferredVoice = voices.find(v =>
+        v.lang.includes('en-US') &&
+        (v.name.includes('Google') || v.name.includes('Microsoft') || v.name.includes('Alex'))
+      ) || voices.find(v => v.lang.includes('en-US')) || voices[0];
+
+      if (preferredVoice) {
+        utterance.voice = preferredVoice;
       }
+
+      utterance.rate = speed;
+      utterance.pitch = 1.0;
+
+      utterance.onend = () => {
+        setLocalPlaying(false);
+        setIsLoading(false);
+      };
+
+      utterance.onerror = () => {
+        setLocalPlaying(false);
+        setIsLoading(false);
+        console.error('Speech synthesis error');
+      };
+
+      window.speechSynthesis.speak(utterance);
+      setIsLoading(false);
+      setUsingFallback(true);
+      console.log(`Playing ${type} message with Web Speech API (fallback)`);
+    };
+
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) {
+      setupVoiceAndSpeak();
     } else {
-      console.log(`Speech synthesis not available. Would play ${type} message: ${content}`);
-      // Simulate playback duration
-      setTimeout(() => setLocalPlaying(false), 3000);
+      const voicesChangedHandler = () => {
+        setupVoiceAndSpeak();
+        window.speechSynthesis.removeEventListener('voiceschanged', voicesChangedHandler);
+      };
+      window.speechSynthesis.addEventListener('voiceschanged', voicesChangedHandler);
+
+      setTimeout(() => {
+        window.speechSynthesis.removeEventListener('voiceschanged', voicesChangedHandler);
+        setupVoiceAndSpeak();
+      }, 1000);
+    }
+  };
+
+  const playOpenAITTS = async () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+
+    setIsLoading(true);
+
+    try {
+      let cachedAudio = await getTTSAudio(content, voice, speed);
+
+      if (!cachedAudio) {
+        console.log('Fetching TTS from API...');
+        const response = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: content, voice, speed, model: 'tts-1' })
+        });
+
+        if (!response.ok) {
+          throw new Error(`TTS API request failed: ${response.status}`);
+        }
+
+        cachedAudio = await response.blob();
+        console.log('TTS received, caching...');
+        await saveTTSAudio(content, voice, speed, cachedAudio);
+      } else {
+        console.log('Using cached TTS');
+      }
+
+      const audioUrl = URL.createObjectURL(cachedAudio);
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+
+      audio.onended = () => {
+        setLocalPlaying(false);
+        setIsLoading(false);
+        URL.revokeObjectURL(audioUrl);
+      };
+
+      audio.onerror = (e) => {
+        console.error('Audio playback error:', e);
+        setLocalPlaying(false);
+        setIsLoading(false);
+        URL.revokeObjectURL(audioUrl);
+
+        console.log('OpenAI TTS failed, falling back to Web Speech API');
+        playWebSpeechAPI();
+      };
+
+      await audio.play();
+      setIsLoading(false);
+      setUsingFallback(false);
+      console.log(`Playing ${type} message with OpenAI TTS`);
+    } catch (error) {
+      console.error('Error with OpenAI TTS:', error);
+      console.log('Falling back to Web Speech API');
+      playWebSpeechAPI();
     }
   };
 
   const handlePlay = () => {
-    setLocalPlaying(!localPlaying);
-    onPlay();
-    
-    if (!localPlaying) {
-      playTTS();
-    } else {
-      // Stop TTS playback
+    if (localPlaying) {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
       }
+      setLocalPlaying(false);
+      setIsLoading(false);
       console.log(`Stopped ${type} message`);
+    } else {
+      setLocalPlaying(true);
+      onPlay();
+      playOpenAITTS();
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
 
   const cardColor = MESSAGE_COLORS[type];
   const badge = MESSAGE_BADGES[type];
@@ -124,6 +210,7 @@ export default function MessageCard({
           <CardTitle className="text-sm font-medium">{title}</CardTitle>
           <Badge variant={badge.variant} className="text-xs">
             {badge.label}
+            {usingFallback && localPlaying && ' (Fallback)'}
           </Badge>
         </div>
         <Button
@@ -131,9 +218,12 @@ export default function MessageCard({
           variant="ghost"
           className="w-8 h-8 shrink-0"
           onClick={handlePlay}
+          disabled={isLoading}
           data-testid={`button-play-${type}`}
         >
-          {isPlaying || localPlaying ? (
+          {isLoading ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : isPlaying || localPlaying ? (
             <Pause className="w-4 h-4" />
           ) : (
             <Play className="w-4 h-4" />

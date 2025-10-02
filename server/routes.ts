@@ -1,9 +1,12 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import { WebSocketServer, WebSocket } from "ws";
 import multer from "multer";
 import { storage } from "./storage";
 import { generateCoachingResponses, transcribeAudio } from "./ai/openai-client";
 import { generateConversationalResponse } from "./ai/gemini-client";
+import { generateSpeech, type TTSOptions } from "./ai/tts";
+import { RealtimeClient } from "./ai/realtime-client";
 import { insertVoiceMessageSchema } from "@shared/schema";
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -105,6 +108,105 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.post("/api/tts", async (req, res) => {
+    try {
+      const { text, voice, speed, model } = req.body;
+
+      if (!text) {
+        return res.status(400).json({ error: "Text is required" });
+      }
+
+      const options: TTSOptions = {
+        voice: voice || "alloy",
+        speed: speed || 1.0,
+        model: model || "tts-1"
+      };
+
+      const audioBuffer = await generateSpeech(text, options);
+
+      res.set({
+        "Content-Type": "audio/mpeg",
+        "Content-Length": audioBuffer.length,
+        "Cache-Control": "public, max-age=31536000"
+      });
+
+      res.send(audioBuffer);
+    } catch (error) {
+      console.error("Error generating TTS:", error);
+      res.status(500).json({ error: "Failed to generate speech" });
+    }
+  });
+
   const httpServer = createServer(app);
+
+  const wss = new WebSocketServer({ server: httpServer, path: "/api/realtime" });
+
+  wss.on("connection", async (ws: WebSocket) => {
+    console.log("Client connected to realtime endpoint");
+
+    let realtimeClient: RealtimeClient | null = null;
+
+    try {
+      if (!process.env.OPENAI_API_KEY) {
+        console.error("OpenAI API key not configured");
+        ws.send(JSON.stringify({ type: "error", message: "OpenAI API key not configured" }));
+        ws.close();
+        return;
+      }
+
+      console.log("Creating realtime client...");
+      realtimeClient = new RealtimeClient({
+        apiKey: process.env.OPENAI_API_KEY,
+        model: "gpt-5-realtime-preview",
+        voice: "alloy",
+        instructions: "You are an AI communication coach. Help users improve their speaking, provide feedback on their communication style, and engage in natural conversation. Be supportive, clear, and constructive."
+      });
+
+      console.log("Connecting to OpenAI Realtime API...");
+      await realtimeClient.connect();
+      console.log("Successfully connected to OpenAI Realtime API");
+
+      realtimeClient.on("*", (message) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(message));
+        }
+      });
+
+      ws.on("message", (data) => {
+        try {
+          const message = JSON.parse(data.toString());
+
+          if (message.type === "audio") {
+            const audioBuffer = Buffer.from(message.data, "base64");
+            const int16Array = new Int16Array(
+              audioBuffer.buffer,
+              audioBuffer.byteOffset,
+              audioBuffer.length / 2
+            );
+            realtimeClient?.sendAudio(int16Array);
+          } else if (message.type === "commit") {
+            realtimeClient?.commitAudio();
+          } else if (message.type === "text") {
+            realtimeClient?.sendText(message.text);
+          } else {
+            realtimeClient?.send(message);
+          }
+        } catch (error) {
+          console.error("Error handling client message:", error);
+        }
+      });
+
+      ws.on("close", () => {
+        console.log("Client disconnected from realtime");
+        realtimeClient?.disconnect();
+      });
+
+    } catch (error) {
+      console.error("Error setting up realtime connection:", error);
+      ws.send(JSON.stringify({ type: "error", message: `Failed to connect to realtime API: ${error}` }));
+      ws.close();
+    }
+  });
+
   return httpServer;
 }

@@ -1,7 +1,13 @@
+import { useState } from 'react';
 import CoachingSession from '@/components/CoachingSession';
+import LiveConversation from '@/components/LiveConversation';
 import ThemeToggle from '@/components/ThemeToggle';
+import { Button } from '@/components/ui/button';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 export default function Home() {
+  const [mode, setMode] = useState<'focus' | 'live'>('focus');
+
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -12,12 +18,20 @@ export default function Home() {
             </div>
             <span className="font-semibold text-lg">Voice Coach</span>
           </div>
-          <ThemeToggle />
+          <div className="flex items-center gap-4">
+            <Tabs value={mode} onValueChange={(v) => setMode(v as 'focus' | 'live')}>
+              <TabsList>
+                <TabsTrigger value="focus">Focus Mode</TabsTrigger>
+                <TabsTrigger value="live">Live Mode</TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <ThemeToggle />
+          </div>
         </div>
       </header>
-      
+
       <main className="py-8">
-        <CoachingSession />
+        {mode === 'focus' ? <CoachingSession /> : <LiveConversation />}
       </main>
     </div>
   );

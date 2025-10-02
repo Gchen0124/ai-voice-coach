@@ -1,35 +1,29 @@
-import { GoogleGenAI } from "@google/genai";
+import OpenAI from "openai";
 
-// DON'T DELETE THIS COMMENT - Note that the newest Gemini model series is "gemini-2.5-flash" or gemini-2.5-pro"
-const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_AI_API_KEY || "" });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export async function generateConversationalResponse(userMessage: string): Promise<string> {
-  // Check for API key
-  if (!process.env.GOOGLE_AI_API_KEY) {
-    console.warn('Gemini API key not found, using mock response');
+  if (!process.env.OPENAI_API_KEY) {
+    console.warn('OpenAI API key not found, using mock response');
     return `I understand you're working with our coaching system. ${userMessage.includes('sample') ? 'This platform provides comprehensive voice training across multiple dimensions including accent refinement, language enhancement, and executive communication skills.' : 'How can I assist you further with your communication goals?'}`;
   }
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [
+    const response = await openai.chat.completions.create({
+      model: "gpt-5",
+      messages: [
         {
-          role: "user",
-          parts: [
-            {
-              text: `You are a helpful AI assistant having a natural conversation. The user said: "${userMessage}". Provide a thoughtful, conversational response that acknowledges their message and continues the dialogue naturally. Keep it concise but engaging.`
-            }
-          ]
-        }
+          role: "system",
+          content: "You are a helpful AI assistant having a natural conversation. Provide thoughtful, conversational responses that acknowledge the user's message and continue the dialogue naturally. Keep it concise but engaging."
+        },
+        { role: "user", content: userMessage }
       ],
     });
 
-    return response.text || "I'm here to help! Could you tell me more about what you're working on?";
+    return response.choices[0].message.content || "I'm here to help! Could you tell me more about what you're working on?";
   } catch (error) {
     console.error('Error generating conversational response:', error);
-    
-    // Fallback response
+
     return `I understand you're working with our coaching system. ${userMessage.includes('sample') ? 'This platform provides comprehensive voice training across multiple dimensions including accent refinement, language enhancement, and executive communication skills.' : 'How can I assist you further with your communication goals?'}`;
   }
 }
